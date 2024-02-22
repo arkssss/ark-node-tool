@@ -1,6 +1,6 @@
 {
   "name": "ark-node-tool",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "hello world",
   "main": "index.js",
   "scripts": {
