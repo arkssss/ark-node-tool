@@ -5,6 +5,7 @@ import (
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/net/proxy"
 	"io/ioutil"
+	"net"
 	"net/http"
 	"os"
 )
@@ -35,15 +36,31 @@ func main() {
 	}
 	defer sshClient.Close()
 
-	listener, err := sshClient.Listen("tcp", "localhost:0")
+	localListener, err := net.Listen("tcp", "localhost:0")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to establish SOCKS5 listener: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Failed to create local listener: %v\n", err)
 		os.Exit(1)
 	}
-	defer listener.Close()
+	defer localListener.Close()
 
-	localAddr := listener.Addr().String()
-	socks5Dialer, err := proxy.SOCKS5("tcp", localAddr, nil, proxy.Direct)
+	go func() {
+		for {
+			conn, err := localListener.Accept()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error accepting connection on local listener: %v\n", err)
+				break
+			}
+			remoteConn, err := sshClient.Dial("tcp", "socks=1080")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error dialing remote server from SSH client: %v\n", err)
+				break
+			}
+			go netCopy(conn, remoteConn)
+			go netCopy(remoteConn, conn)
+		}
+	}()
+
+	socks5Dialer, err := proxy.SOCKS5("tcp", localListener.Addr().String(), nil, proxy.Direct)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to configure SOCKS5 proxy: %v\n", err)
 		os.Exit(1)
@@ -69,4 +86,10 @@ func main() {
 
 	fmt.Printf("HTTP response status: %s\n", response.Status)
 	fmt.Printf("Response body:\n%s\n", string(body))
+}
+
+func netCopy(dst, src net.Conn) {
+	defer dst.Close()
+	defer src.Close()
+	_, _ = io.Copy(dst, src)
 }
