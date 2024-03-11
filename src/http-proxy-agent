@@ -1,0 +1,72 @@
+package main
+
+import (
+	"fmt"
+	"golang.org/x/crypto/ssh"
+	"golang.org/x/net/proxy"
+	"io/ioutil"
+	"net/http"
+	"os"
+)
+
+func main() {
+	if len(os.Args) != 5 {
+		fmt.Fprintf(os.Stderr, "usage: %s <proxy ssh server> <username> <password> <target URL>\n", os.Args[0])
+		os.Exit(1)
+	}
+
+	sshServer := os.Args[1]
+	username := os.Args[2]
+	password := os.Args[3]
+	targetURL := os.Args[4]
+
+	config := &ssh.ClientConfig{
+		User: username,
+		Auth: []ssh.AuthMethod{
+			ssh.Password(password),
+		},
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+	}
+
+	sshClient, err := ssh.Dial("tcp", sshServer, config)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to connect to SSH server: %v\n", err)
+		os.Exit(1)
+	}
+	defer sshClient.Close()
+
+	listener, err := sshClient.Listen("tcp", "localhost:0")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to establish SOCKS5 listener: %v\n", err)
+		os.Exit(1)
+	}
+	defer listener.Close()
+
+	localAddr := listener.Addr().String()
+	socks5Dialer, err := proxy.SOCKS5("tcp", localAddr, nil, proxy.Direct)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to configure SOCKS5 proxy: %v\n", err)
+		os.Exit(1)
+	}
+
+	httpTransport := &http.Transport{
+		Dial: socks5Dialer.Dial,
+	}
+
+	httpClient := &http.Client{Transport: httpTransport}
+	response, err := httpClient.Get(targetURL)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to send HTTP request via the proxy: %v\n", err)
+		os.Exit(1)
+	}
+	defer response.Body.Close()
+
+	body, err := ioutil.ReadAll(response.Body)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to read response body: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("HTTP response status: %s\n", response.Status)
+	fmt.Printf("Response body:\n%s\n", string(body))
+}
